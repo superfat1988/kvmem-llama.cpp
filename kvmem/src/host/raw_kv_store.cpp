@@ -2,6 +2,7 @@
 #include "kvmem/nvme_kv_tier.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -12,10 +13,11 @@
 
 namespace {
 uint64_t monotonic_ns() {
-    timespec ts{};
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ull +
-           static_cast<uint64_t>(ts.tv_nsec);
+    // std::chrono::steady_clock: backed by QueryPerformanceCounter on Windows
+    // and CLOCK_MONOTONIC on POSIX, so this helper stays portable.
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
 }
 } // namespace
 
