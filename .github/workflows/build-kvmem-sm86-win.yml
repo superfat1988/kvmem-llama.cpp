@@ -54,15 +54,16 @@ jobs:
             -DLLAMA_KVMEM=ON \
             -DLLAMA_KVMEM_ROOT="$GITHUB_WORKSPACE"
 
-      - name: Build binaries
+      # Build ONLY the deliverable targets. The kvmem test targets
+      # (tests/nvme_kv_tier_test.cpp etc.) include POSIX-only headers
+      # (<unistd.h>, <sys/*.h>) and cannot compile under MSVC, which broke the
+      # earlier "build everything" step. LLAMA_BUILD_EXAMPLES is forced OFF
+      # upstream, so llama-cli / llama-bench targets do not exist.
+      - name: Build binaries (deliverable targets only)
         shell: bash
         run: |
-          cmake --build build --config Release -j 3
-
-      - name: Run CPU unit tests (no model needed; informational)
-        shell: bash
-        run: |
-          ctest --test-dir build -R "kvmem-(chat-template|chat-id|reasoning-budget)" --output-on-failure || true
+          cmake --build build --config Release -j 3 \
+            --target llama-kvmem-server llama-kvmem-cli llama-quantize
 
       - name: Stage artifacts + bundle runtime DLLs
         shell: bash
