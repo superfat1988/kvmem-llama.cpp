@@ -24,9 +24,11 @@
 #include <utility>
 #include <vector>
 
+#if !defined(_WIN32)
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 
 namespace kvmem {
 
@@ -98,7 +100,57 @@ struct NvmeBatchIoStats {
     uint32_t cpu_copy_blocks = 0;
 };
 
+#if defined(_WIN32)
+
+// KVMem's NVMe tier is a Linux-oriented host-storage extension; the README
+// states "NVMe offload is not implemented". On Windows this class is compiled
+// out: the portable host code (kvmem_runtime.cpp / raw_kv_store.cpp) still
+// constructs and queries it, so provide a stub whose enabled() is always
+// false and whose mutators are no-ops. Host code then falls back to the
+// CPU/RAM tier, exactly as if no NVMe tier were configured.
 class NvmeKvTier {
+public:
+    explicit NvmeKvTier(NvmeKvTierConfig cfg) : cfg_(std::move(cfg)) {}
+
+    bool enabled() const { return false; }
+    uint32_t slot_count() const { return 0; }
+    uint64_t slot_bytes() const { return cfg_.slot_bytes; }
+    const std::string &path() const { return cfg_.dir; }
+    bool drops_page_cache() const { return false; }
+    bool direct_mapped() const { return false; }
+    bool read_only() const { return false; }
+    bool has_overlay() const { return false; }
+    bool direct_reads() const { return false; }
+    void mark_present_range(uint32_t, uint32_t) {}
+    uint32_t free_slots() const { return 0; }
+    uint32_t used_slots() const { return 0; }
+    uint64_t slot_offset(int32_t) const { return 0; }
+    int32_t block_slot(uint32_t) const { return -1; }
+    NvmeSlotPlacement place_block(uint32_t) { return NvmeSlotPlacement{}; }
+    NvmeSlotPlacement place_block_evicting(uint32_t) { return NvmeSlotPlacement{}; }
+    void release_block(uint32_t) {}
+    void clear() {}
+    void touch(uint32_t) {}
+    int32_t lru_victim() const { return -1; }
+    void write_block(uint32_t, const void *, uint64_t) {}
+    void read_block(uint32_t, void *, uint64_t) {}
+    void write_slot(int32_t, const void *, uint64_t) const {}
+    void write_slot_range(int32_t, uint64_t, const void *, uint64_t) const {}
+    void read_slot(int32_t, void *, uint64_t) const {}
+    void read_slot_range(int32_t, uint64_t, void *, uint64_t) const {}
+    void write_spans(const std::vector<NvmeIoSpan> &,
+                     const void *, uint64_t, NvmeBatchIoStats * = nullptr) const {}
+    void read_spans(const std::vector<NvmeIoSpan> &,
+                    void *, uint64_t, NvmeBatchIoStats * = nullptr) const {}
+
+private:
+    NvmeKvTierConfig cfg_;
+};
+
+#else
+
+class NvmeKvTier {
+
 public:
     explicit NvmeKvTier(NvmeKvTierConfig cfg) : cfg_(std::move(cfg)) {
         if (cfg_.slot_bytes > 0 && cfg_.total_bytes >= cfg_.slot_bytes) {
@@ -843,5 +895,7 @@ private:
     std::unordered_map<uint32_t, int32_t> block_to_slot_;
     std::vector<uint32_t> lru_;
 };
+
+#endif // !defined(_WIN32)
 
 } // namespace kvmem
