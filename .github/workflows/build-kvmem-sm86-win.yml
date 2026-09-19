@@ -47,9 +47,15 @@ jobs:
       - name: Configure (sm_86, Release, FA all quants, shared libs)
         shell: bash
         run: |
+          # Output every runtime/library/archive artifact to build/bin so that
+          # cross-subdirectory relative import-lib paths resolve the same way
+          # as llama.cpp's own libs (fixes LNK1181 kvmem\kvmem.lib).
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$GITHUB_WORKSPACE/build/bin" \
+            -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$GITHUB_WORKSPACE/build/bin" \
+            -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY="$GITHUB_WORKSPACE/build/bin" \
             -DGGML_CUDA=ON \
             -DGGML_CUDA_FA_ALL_QUANTS=ON \
             -DCMAKE_CUDA_ARCHITECTURES=86 \
@@ -62,16 +68,22 @@ jobs:
       # (<unistd.h>, <sys/*.h>) and cannot compile under MSVC, which broke the
       # earlier "build everything" step. LLAMA_BUILD_EXAMPLES is forced OFF
       # upstream, so llama-cli / llama-bench targets do not exist.
-      # Shared-library mode: llama.dll links kvmem.lib, but CMake/Ninja does
-      # not order the cross-subdirectory SHARED import library before the
-      # llama.dll link (LNK1181: cannot open input file 'kvmem\kvmem.lib').
-      # Build the kvmem library first, then everything else.
+      # Shared-library mode: llama.dll links kvmem.lib. The kvmem import library
+      # is built first, and all artifacts land in build/bin (see configure).
       - name: Build binaries (kvmem lib first, then deliverables)
         shell: bash
         run: |
           cmake --build build --config Release -j 3 --target kvmem
           cmake --build build --config Release -j 3 \
             --target llama-kvmem-server llama-kvmem-cli llama-quantize
+          # Diagnostics if the link still fails: show how the rsp references
+          # kvmem and where the import lib actually landed.
+          echo "=== llama.rsp kvmem references ==="
+          tr ';' '\n' < build/llama.cpp/src/CMakeFiles/llama.rsp 2>/dev/null | grep -i kvmem || echo "(none)"
+          echo "=== build/bin libs ==="
+          ls build/bin/*.lib 2>/dev/null | head -10 || echo "(no libs in build/bin)"
+          echo "=== build root kvmem artifacts ==="
+          ls build/kvmem/*.lib 2>/dev/null | head -5 || echo "(no kvmem.lib under build/kvmem)"
 
       # Shared-library mode: the exes are thin launchers; the code lives in
       # ggml*.dll / llama*.dll / llama-common.dll / mtmd.dll / kvmem.dll etc.
