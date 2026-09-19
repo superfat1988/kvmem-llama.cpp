@@ -63,46 +63,19 @@ jobs:
             -DLLAMA_KVMEM=ON \
             -DLLAMA_KVMEM_ROOT="$GITHUB_WORKSPACE"
 
-      # ---- FAST DIAGNOSTIC PASS (temporary) ----
-      # LNK1181 'bin\kvmem.lib': the kvmem import library is not where llama's
-      # link line expects it. Dump the rsp reference, build kvmem verbosely and
-      # locate the actual kvmem.lib, then stop (fail-fast) so we can fix with
-      # facts instead of guessing. Remove this step once linking succeeds.
-      - name: Diagnose kvmem.lib layout (temporary)
-        shell: bash
-        run: |
-          set +e
-          echo "=== llama.rsp kvmem references ==="
-          tr ';' '\n' < build/llama.cpp/src/CMakeFiles/llama.rsp 2>/dev/null | grep -i kvmem || echo "(no kvmem in llama.rsp)"
-          echo "=== verbose build of kvmem only ==="
-          cmake --build build --config Release -j 3 --target kvmem --verbose 2>&1 | grep -aE "link.exe|implib|kvmem" | tail -15
-          echo "=== locate kvmem import lib ==="
-          find build -iname "kvmem*.lib" 2>/dev/null || echo "(no kvmem*.lib found)"
-          echo "=== build/bin kvmem entries ==="
-          ls -la build/bin/ 2>/dev/null | grep -i kvmem || echo "(no kvmem in build/bin)"
-          exit 1
-
       # Build ONLY the deliverable targets. The kvmem test targets
       # (tests/nvme_kv_tier_test.cpp etc.) include POSIX-only headers
       # (<unistd.h>, <sys/*.h>) and cannot compile under MSVC, which broke the
       # earlier "build everything" step. LLAMA_BUILD_EXAMPLES is forced OFF
       # upstream, so llama-cli / llama-bench targets do not exist.
-      # Shared-library mode: llama.dll links kvmem.lib. The kvmem import library
-      # is built first, and all artifacts land in build/bin (see configure).
+      # kvmem is a STATIC library (see kvmem/CMakeLists.txt) so its .lib
+      # always exists for llama.dll to link; build it first, then the rest.
       - name: Build binaries (kvmem lib first, then deliverables)
         shell: bash
         run: |
           cmake --build build --config Release -j 3 --target kvmem
           cmake --build build --config Release -j 3 \
             --target llama-kvmem-server llama-kvmem-cli llama-quantize
-          # Diagnostics if the link still fails: show how the rsp references
-          # kvmem and where the import lib actually landed.
-          echo "=== llama.rsp kvmem references ==="
-          tr ';' '\n' < build/llama.cpp/src/CMakeFiles/llama.rsp 2>/dev/null | grep -i kvmem || echo "(none)"
-          echo "=== build/bin libs ==="
-          ls build/bin/*.lib 2>/dev/null | head -10 || echo "(no libs in build/bin)"
-          echo "=== build root kvmem artifacts ==="
-          ls build/kvmem/*.lib 2>/dev/null | head -5 || echo "(no kvmem.lib under build/kvmem)"
 
       # Shared-library mode: the exes are thin launchers; the code lives in
       # ggml*.dll / llama*.dll / llama-common.dll / mtmd.dll / kvmem.dll etc.

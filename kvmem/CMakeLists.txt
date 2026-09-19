@@ -1,4 +1,9 @@
-add_library(kvmem
+# Static library on purpose: on MSVC a SHARED kvmem without any
+# __declspec(dllexport) symbol produces NO import library (LNK1181
+# 'kvmem.lib' when llama.dll links it). Consumers never call kvmem
+# symbols directly - they go through the llama API - so the code is
+# folded into llama.dll/llama.lib instead.
+add_library(kvmem STATIC
     src/host/kvmem_store.cpp
     src/host/kvmem_runtime.cpp
     src/host/raw_kv_store.cpp
