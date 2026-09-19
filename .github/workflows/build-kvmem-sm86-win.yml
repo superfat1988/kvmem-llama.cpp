@@ -63,6 +63,25 @@ jobs:
             -DLLAMA_KVMEM=ON \
             -DLLAMA_KVMEM_ROOT="$GITHUB_WORKSPACE"
 
+      # ---- FAST DIAGNOSTIC PASS (temporary) ----
+      # LNK1181 'bin\kvmem.lib': the kvmem import library is not where llama's
+      # link line expects it. Dump the rsp reference, build kvmem verbosely and
+      # locate the actual kvmem.lib, then stop (fail-fast) so we can fix with
+      # facts instead of guessing. Remove this step once linking succeeds.
+      - name: Diagnose kvmem.lib layout (temporary)
+        shell: bash
+        run: |
+          set +e
+          echo "=== llama.rsp kvmem references ==="
+          tr ';' '\n' < build/llama.cpp/src/CMakeFiles/llama.rsp 2>/dev/null | grep -i kvmem || echo "(no kvmem in llama.rsp)"
+          echo "=== verbose build of kvmem only ==="
+          cmake --build build --config Release -j 3 --target kvmem --verbose 2>&1 | grep -aE "link.exe|implib|kvmem" | tail -15
+          echo "=== locate kvmem import lib ==="
+          find build -iname "kvmem*.lib" 2>/dev/null || echo "(no kvmem*.lib found)"
+          echo "=== build/bin kvmem entries ==="
+          ls -la build/bin/ 2>/dev/null | grep -i kvmem || echo "(no kvmem in build/bin)"
+          exit 1
+
       # Build ONLY the deliverable targets. The kvmem test targets
       # (tests/nvme_kv_tier_test.cpp etc.) include POSIX-only headers
       # (<unistd.h>, <sys/*.h>) and cannot compile under MSVC, which broke the
