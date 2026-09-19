@@ -1,8 +1,10 @@
 # Build kvmem-llama.cpp (KVMem + llama.cpp) for sm_86 (RTX 30 series) on Windows
 # KVMem requires exactly CUDA 13.2 Update 2 (nvcc 13.2.86) for IQ3/IQ4 correctness
 # (nvcc 13.2.51 is known to produce garbage output on Qwen3.8-27B IQ3_S).
-# Produces llama-kvmem-server / llama-kvmem-cli / llama-quantize / llama-cli / llama-bench
-# plus bundled CUDA 13.2 runtime DLLs, uploaded as a downloadable artifact.
+# Produces a self-contained package: thin launcher exes (llama-kvmem-server/
+# llama-kvmem-cli/llama-quantize) + all shared libraries (ggml*.dll, llama*.dll,
+# mtmd.dll, kvmem.dll) + CUDA 13.2 runtime DLLs, uploaded as a downloadable
+# artifact. Smoke-tests the DLL dependency chain before upload.
 name: build-kvmem-sm86-win
 
 on:
@@ -42,11 +44,12 @@ jobs:
           echo "--- llama.cpp patch status ---"
           git -C llama.cpp status --short || true
 
-      - name: Configure (sm_86, Release, FA all quants)
+      - name: Configure (sm_86, Release, FA all quants, shared libs)
         shell: bash
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
             -DGGML_CUDA=ON \
             -DGGML_CUDA_FA_ALL_QUANTS=ON \
             -DCMAKE_CUDA_ARCHITECTURES=86 \
@@ -65,24 +68,45 @@ jobs:
           cmake --build build --config Release -j 3 \
             --target llama-kvmem-server llama-kvmem-cli llama-quantize
 
+      # Shared-library mode: the exes are thin launchers; the code lives in
+      # ggml*.dll / llama*.dll / llama-common.dll / mtmd.dll / kvmem.dll etc.
+      # Everything under build/bin must ship, plus the CUDA 13.2 runtime DLLs
+      # (cudart/cublas/cublasLt) and the MSVC runtime.
       - name: Stage artifacts + bundle runtime DLLs
         shell: bash
         run: |
+          set -euo pipefail
+          echo "=== build/bin contents ==="
+          ls -lah build/bin/
           mkdir -p dist
-          find build/bin -maxdepth 1 -name "*.exe" -exec cp {} dist/ \;
-          ls dist/
-          # CUDA 13.2 runtime DLLs so the exes run without a full toolkit install
-          CUDA_BIN="$(cygpath -u "$CUDA_PATH")/bin"
+          cp build/bin/* dist/
+          # CUDA 13.2 runtime DLLs - fail fast if missing (previous runs
+          # silently swallowed this and shipped a non-runnable package)
+          CUDA_BIN="/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.2/bin"
           echo "CUDA_BIN=$CUDA_BIN"
-          cp "$CUDA_BIN"/cudart64_*.dll dist/ 2>/dev/null || true
-          cp "$CUDA_BIN"/cublas64_*.dll dist/ 2>/dev/null || true
-          cp "$CUDA_BIN"/cublasLt64_*.dll dist/ 2>/dev/null || true
+          ls "$CUDA_BIN" | grep -E "cudart64_|cublas64_|cublasLt64_" || {
+            echo "CUDA runtime DLLs NOT FOUND under $CUDA_BIN"
+            ls "$CUDA_BIN" | head -40
+            exit 1
+          }
+          cp "$CUDA_BIN"/cudart64_*.dll "$CUDA_BIN"/cublas64_*.dll "$CUDA_BIN"/cublasLt64_*.dll dist/
           # MSVC runtime
-          cp /c/Windows/System32/vcruntime140.dll dist/ 2>/dev/null || true
-          cp /c/Windows/System32/vcruntime140_1.dll dist/ 2>/dev/null || true
-          cp /c/Windows/System32/msvcp140.dll dist/ 2>/dev/null || true
-          # sanity: the KVMem server must exist
-          test -f dist/llama-kvmem-server.exe
+          cp /c/Windows/System32/vcruntime140.dll /c/Windows/System32/vcruntime140_1.dll /c/Windows/System32/msvcp140.dll dist/ 2>/dev/null || true
+          # MSVC OpenMP runtime (harmless if the build does not link it)
+          cp /c/Windows/System32/vcomp140.dll dist/ 2>/dev/null || true
+          echo "=== smoke test: DLL dependency chain ==="
+          ./dist/llama-kvmem-cli.exe -h >/dev/null 2>&1 || {
+            echo "llama-kvmem-cli.exe failed to load (missing DLL?)"
+            ./dist/llama-kvmem-cli.exe -h 2>&1 | head -10
+            exit 1
+          }
+          echo "cli smoke OK"
+          ./dist/llama-kvmem-server.exe -h >/dev/null 2>&1 || {
+            echo "llama-kvmem-server.exe failed to load (missing DLL?)"
+            ./dist/llama-kvmem-server.exe -h 2>&1 | head -10
+            exit 1
+          }
+          echo "server smoke OK"
           echo "=== final dist ==="
           ls -lah dist/
 
